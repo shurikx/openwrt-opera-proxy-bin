@@ -39,12 +39,10 @@ jobs:
           - arch: "mipsle"
             goarch: "mipsle"
             gomips: "softfloat"
-            pkg_arch: "mipsel_24kc"
             sdk_url: "https://downloads.openwrt.org/releases/25.12.0/targets/ramips/mt7621/openwrt-sdk-25.12.0-ramips-mt7621_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
           - arch: "arm64"
             goarch: "arm64"
             gomips: ""
-            pkg_arch: "aarch64_cortex-a53"
             sdk_url: "https://downloads.openwrt.org/releases/25.12.0/targets/mediatek/filogic/openwrt-sdk-25.12.0-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
     
     steps:
@@ -85,20 +83,23 @@ jobs:
       - name: Compile APK
         run: |
           cd sdk
+          make package/opera-proxy/clean
           ./scripts/feeds update base
-          ./scripts/feeds install -a
+          ./scripts/feeds install opera-proxy || true
           echo "CONFIG_PACKAGE_opera-proxy=y" > .config
           make defconfig
-          make package/opera-proxy/compile V=s IGNORE_ERRORS=m
+          make package/opera-proxy/compile V=s
           
-          echo "=== Результат сборки ==="
-          find bin/packages/ -name "opera-proxy*.apk"
+          echo "=== Поиск собранного APK ==="
+          mkdir -p ../output-artifacts
+          find bin/ -name "opera-proxy*.apk" -exec cp {} ../output-artifacts/ \;
+          ls -R ../output-artifacts/
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: opera-proxy-${{ matrix.arch }}
-          path: sdk/bin/packages/**/opera-proxy_*.apk
+          path: output-artifacts/
           if-no-files-found: error
 
   publish:
