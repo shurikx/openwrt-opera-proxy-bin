@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * 0'
 
 jobs:
   check-version:
@@ -14,122 +12,82 @@ jobs:
       exists: ${{ steps.check.outputs.exists }}
       ver: ${{ steps.get_ver.outputs.ver }}
     steps:
-      - name: Get Latest Opera Proxy Version
+      - name: Get Latest Version
         id: get_ver
         run: |
           VER=$(curl -fs -o /dev/null -w %{redirect_url} https://github.com/Snawoot/opera-proxy/releases/latest | cut -d '/' -f8 | sed 's/^v//')
           echo "ver=$VER" >> $GITHUB_OUTPUT
           echo "VER=$VER" >> $GITHUB_ENV
 
-      - name: Check if tag exists
+      - name: Check Release
         id: check
         run: |
-          # Проверяем наличие тега через API GitHub
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             https://api.github.com/repos/${{ github.repository }}/releases/tags/v${{ env.VER }})
-          
-          if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "Релиз v${{ env.VER }} уже существует. Пропускаем сборку."
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
+          echo "exists=$([ "$HTTP_STATUS" -eq 200 ] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
 
-  build-mt7621:
+  build:
     needs: check-version
     if: needs.check-version.outputs.exists == 'false'
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: "mipsle"
+            target: "ramips/mt7621"
+            sdk_url: "https://downloads.openwrt.org/releases/25.12.0/targets/ramips/mt7621/openwrt-sdk-25.12.0-ramips-mt7621_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+            pkg_arch: "mipsel_24kc"
+          - arch: "arm64"
+            target: "mediatek/filogic"
+            sdk_url: "https://downloads.openwrt.org/releases/25.12.0/targets/mediatek/filogic/openwrt-sdk-25.12.0-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+            pkg_arch: "aarch64_cortex-a53"
+    
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download SDK (MT7621)
-        run: |
-          # Ссылка на SDK 25.10 для mt7621
-          wget https://downloads.openwrt.org/releases/25.12.0/targets/ramips/mt7621/openwrt-sdk-25.12.0-ramips-mt7621_gcc-14.3.0_musl.Linux-x86_64.tar.zst
-          mkdir sdk
-          # Распаковываем с флагом --strip-components=1, чтобы убрать вложенную папку
-          tar --use-compress-program=unzstd -xf *.tar.zst -C sdk --strip-components=1
+      - name: Install dependencies
+        run: sudo apt update && sudo apt install -y libncurses5-dev zstd
 
-      - name: Add opera-proxy package
+      - name: Setup SDK
         run: |
-          cp -r opera-proxy sdk/package/opera-proxy
+          wget -O sdk.tar.zst ${{ matrix.sdk_url }}
+          mkdir sdk
+          tar --use-compress-program=unzstd -xf sdk.tar.zst -C sdk --strip-components=1
+
+      - name: Prepare Package
+        run: |
+          cp -r opera-proxy sdk/package/
           cd sdk/package/opera-proxy
           chmod +x update.sh
-          ./update.sh mipsle
+          ./update.sh ${{ matrix.arch }}
 
-      - name: Build .apk
-        run: |
-          cd sdk
-          # В SDK 25 важно обновить фиды для корректной генерации индексов apk
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          make defconfig
-          make package/opera-proxy/compile V=s -j$(nproc)
-
-      - name: Upload MT7621 artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: opera-proxy-mt7621
-          # Изменено расширение на .apk
-          path: sdk/bin/packages/mipsel_24kc/base/opera-proxy_*.apk
-
-  build-arm64:
-    needs: check-version
-    if: needs.check-version.outputs.exists == 'false'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download SDK (ARM64)
-        run: |
-          # Ссылка на SDK 25.10 для mediatek/filogic
-          wget https://downloads.openwrt.org/releases/25.12.0/targets/mediatek/filogic/openwrt-sdk-25.12.0-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
-          mkdir sdk
-          tar --use-compress-program=unzstd -xf *.tar.zst -C sdk --strip-components=1
-
-      - name: Add opera-proxy package
-        run: |
-          cp -r opera-proxy sdk/package/opera-proxy
-          cd sdk/package/opera-proxy
-          chmod +x update.sh
-          ./update.sh arm64
-
-      - name: Build .apk
+      - name: Compile
         run: |
           cd sdk
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          make package/opera-proxy/download V=s
           make defconfig
           make package/opera-proxy/compile V=s -j$(nproc)
 
-      - name: Upload ARM64 artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: opera-proxy-arm64
-          # Изменено расширение на .apk
-          path: sdk/bin/packages/aarch64_cortex-a53/base/opera-proxy_*.apk
+          name: opera-proxy-${{ matrix.arch }}
+          path: sdk/bin/packages/${{ matrix.pkg_arch }}/base/opera-proxy_*.apk
 
   publish:
-    needs: [check-version, build-mt7621, build-arm64]
-    if: needs.check-version.outputs.exists == 'false'
+    needs: [check-version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          
-      - name: Extract Version
-        run: |
-          VER=$(curl -fs -o /dev/null -w %{redirect_url} https://github.com/Snawoot/opera-proxy/releases/latest | cut -d '/' -f8 | sed 's/^v//')
-          echo "VER=$VER" >> $GITHUB_ENV
-
-      - name: Publish Release
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.VER }}
-          name: "v${{ env.VER }} (OpenWrt 25.10)"
-          # Публикуем файлы с расширением .apk
+          tag_name: v${{ needs.check-version.outputs.ver }}
           files: artifacts/**/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
