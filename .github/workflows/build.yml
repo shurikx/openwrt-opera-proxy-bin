@@ -67,7 +67,6 @@ jobs:
           cd sdk
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          make package/opera-proxy/download V=s
           make defconfig
           make package/opera-proxy/compile V=s -j$(nproc)
 
