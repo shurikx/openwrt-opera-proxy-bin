@@ -9,6 +9,8 @@ VER="$(curl -fs -o /dev/null -w %{redirect_url} https://github.com/Snawoot/opera
 
 echo -e "🚀 Загружаем бинарные файлы Opera Proxy\nВерсия: $VER для архитектуры: $ARCH"
 
+mkdir -p files/usr/bin
+
 # Скачать бинарник
 curl -LS "https://github.com/Snawoot/opera-proxy/releases/download/v${VER}/opera-proxy.linux-${ARCH}" -o files/usr/bin/opera-proxy
 
